@@ -1,0 +1,97 @@
+enterprise_name: "GlobalCorp"
+version: "1.0.0"
+
+global_settings:
+  default_sampling_rate: 1000  # milliseconds
+  buffer_size: 10000
+  max_retries: 3
+  timeout_seconds: 30
+
+sites:
+  - site_name: "Site-A"
+    enterprise: "GlobalCorp"
+    description: "Main manufacturing facility for beverage production"
+    default_sampling_rate: 500
+    buffer_size: 15000
+    assets:
+      - asset_name: "FillerMachine-01"
+        description: "Automated beverage filling machine with integrated quality control"
+        opcua_endpoint: "opc.tcp://192.168.1.100:4840"
+        node_mapping:
+          MotorSpeed: "ns=2;i=1001"
+          MachineState: "ns=2;i=1002"
+          CycleCount: "ns=2;i=1003"
+          Vibration: "ns=2;i=1004"
+          Temperature: "ns=2;i=1005"
+          Pressure: "ns=2;i=1006"
+          PowerConsumption: "ns=2;i=1007"
+          ProductionRate: "ns=2;i=1008"
+          QualityStatus: "ns=2;i=1009"
+        
+        # Energy Monitoring Configuration
+        energy_monitoring:
+          power_tags: ["PowerConsumption"]
+          energy_tags: []  # To be added later
+          voltage_tags: []  # To be added later
+          current_tags: []  # To be added later
+          aggregation_interval: 300
+        
+        # OEE Monitoring Configuration
+        oee_monitoring:
+          availability_tags: ["MachineState"]
+          performance_tags: ["MotorSpeed", "ProductionRate"]
+          quality_tags: ["QualityStatus"]
+          cycle_count_tag: "CycleCount"
+          production_rate_tag: "ProductionRate"
+        
+        # Predictive Maintenance Configuration
+        predictive_maintenance:
+          vibration_tags: ["Vibration"]
+          temperature_tags: ["Temperature"]
+          pressure_tags: ["Pressure"]
+          maintenance_thresholds:
+            Vibration: 5.0
+            Temperature: 80.0
+            Pressure: 10.0
+          prediction_horizon: 24
+        
+        metadata:
+          manufacturer: "FillTech Industries"
+          model: "FT-2000X"
+          installation_date: "2023-01-15"
+          area: "AssemblyLine"
+          line: "Production-Line-1"
+          capacity_bottles_per_hour: 12000
+
+  - site_name: "Site-B"
+    enterprise: "GlobalCorp"
+    description: "Secondary packaging and distribution facility"
+    default_sampling_rate: 1000
+    buffer_size: 10000
+    assets:
+      - asset_name: "PackagingMachine-01"
+        description: "Automated packaging machine for final product packaging"
+        opcua_endpoint: "opc.tcp://192.168.2.100:4840"
+        node_mapping:
+          MotorSpeed: "ns=2;i=2001"
+          MachineState: "ns=2;i=2002"
+          CycleCount: "ns=2;i=2003"
+          ConveyorSpeed: "ns=2;i=2004"
+          PackageCount: "ns=2;i=2005"
+          
+        energy_monitoring:
+          power_tags: []
+          aggregation_interval: 300
+          
+        oee_monitoring:
+          availability_tags: ["MachineState"]
+          performance_tags: ["MotorSpeed", "ConveyorSpeed"]
+          quality_tags: []
+          cycle_count_tag: "CycleCount"
+          
+        metadata:
+          manufacturer: "PackTech Solutions"
+          model: "PT-1500"
+          installation_date: "2023-03-20"
+          area: "Packaging"
+          line: "Packaging-Line-1"
