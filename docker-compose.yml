@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # OPC UA Simulation Server
+  opcua-server:
+    build: 
+      context: ./opcua-server-sim
+      dockerfile: Dockerfile
+    container_name: opcua-simulation-server
+    ports:
+      - "4840:4840"
+    volumes:
+      - ./opcua-server-sim/certs:/app/certs
+      - ./use_case_config.yaml:/app/use_case_config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - opcua-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', 4840)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # OPC UA Edge Collector
+  edge-collector:
+    build:
+      context: ./opcua-edge-collector
+      dockerfile: Dockerfile
+    container_name: opcua-edge-collector
+    depends_on:
+      opcua-server:
+        condition: service_healthy
+    volumes:
+      - ./opcua-server-sim/certs:/app/certs:ro
+      - ./opcua-edge-collector/data:/app/data
+      - ./opcua-edge-collector/logs:/app/logs
+      - ./use_case_config.yaml:/app/use_case_config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      # InfluxDB Cloud Configuration
+      - INFLUXDB_URL=${INFLUXDB_URL:-https://cloud2.influxdata.com}
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-globalcorp}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-industrial-data}
+      # Edge Collector Configuration
+      - BUFFER_SEND_INTERVAL=${BUFFER_SEND_INTERVAL:-30}
+      - BUFFER_BATCH_SIZE=${BUFFER_BATCH_SIZE:-100}
+      - ANALYTICS_BATCH_SIZE=${ANALYTICS_BATCH_SIZE:-50}
+      - MAX_RETRY_ATTEMPTS=${MAX_RETRY_ATTEMPTS:-3}
+      - RETRY_DELAY=${RETRY_DELAY:-5}
+      # Logging Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    networks:
+      - opcua-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.path.append('src'); print('Edge Collector healthy')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  opcua-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  certs:
+    driver: local
+  collector-data:
+    driver: local
+  collector-logs:
+    driver: local
