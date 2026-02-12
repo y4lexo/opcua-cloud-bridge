@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any
 sys.path.append(str(Path(__file__).parent.parent.parent / "common"))
 
 from data_models import BridgeConfiguration, AssetConfiguration, TelemetryPoint
+from config import load_config, get_connection_settings
 from opcua_client import OPCUAClient
 from analytics_processor import AnalyticsProcessor
 from data_buffer import DataBuffer, get_data_buffer
@@ -84,13 +85,9 @@ class EdgeCollectorOrchestrator:
             raise
     
     async def _load_configuration(self):
-        """Load configuration from YAML file"""
+        """Load configuration with environment variable overrides"""
         try:
-            config_file = Path(__file__).parent / self.config_path
-            with open(config_file, 'r') as f:
-                import yaml
-                config_data = yaml.safe_load(f)
-            self.config = BridgeConfiguration(**config_data)
+            self.config = load_config()
             logger.info(f"Configuration loaded: {self.config.enterprise_name}")
         except Exception as e:
             logger.error(f"Failed to load configuration: {e}")

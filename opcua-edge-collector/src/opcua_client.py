@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Any
@@ -14,6 +16,7 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent.parent / "common"))
 
 from data_models import BridgeConfiguration, AssetConfiguration, TelemetryPoint, Quality
+from config import load_config, get_connection_settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,49 +33,67 @@ class OPCUAClient:
         self.data_callbacks: List[Callable[[TelemetryPoint], None]] = []
         self.is_running = False
         
+        # Connection management
+        self.connection_attempts: Dict[str, int] = {}
+        self.last_connection_attempt: Dict[str, float] = {}
+        self.max_retry_attempts = 5
+        self.base_retry_delay = 1.0  # Base delay for exponential backoff
+        self.max_retry_delay = 60.0  # Maximum delay
+        
         # Security settings
         self.cert_dir = Path("../../opcua-server-sim/certs")
         self.client_cert_file = self.cert_dir / "client_cert.der"
         self.client_key_file = self.cert_dir / "client_private_key.pem"
         self.trust_store = self.cert_dir / "trust" / "trust.der"
         
-        logger.info("OPC UA Client initialized")
+        logger.info("OPC UA Client initialized with enhanced reconnection strategy")
     
     async def load_config(self) -> BridgeConfiguration:
-        """Load configuration from YAML file"""
+        """Load configuration from YAML file with environment overrides"""
         try:
-            config_file = Path(__file__).parent / self.config_path
-            with open(config_file, 'r') as f:
-                config_data = yaml.safe_load(f)
-            self.config = BridgeConfiguration(**config_data)
+            self.config = load_config()
             logger.info(f"Loaded configuration for enterprise: {self.config.enterprise_name}")
+            
+            # Update connection settings from config
+            conn_settings = get_connection_settings()
+            self.max_retry_attempts = conn_settings.get('retry_attempts', 5)
+            self.base_retry_delay = conn_settings.get('retry_delay', 1.0)
+            
             return self.config
         except Exception as e:
             logger.error(f"Failed to load configuration: {e}")
             raise
     
-    async def setup_security(self, client: Client, endpoint: str) -> Client:
-        """Setup X.509 certificate security for OPC UA client"""
+    async def setup_security(self, client: Client, endpoint: str, asset: Optional[AssetConfiguration] = None) -> Client:
+        """Setup security for OPC UA client with dynamic policy negotiation"""
         try:
+            # Determine security policy
+            security_policy = await self._negotiate_security_policy(endpoint, asset)
+            
             # Generate client certificates if they don't exist
             await self._ensure_client_certificates()
             
-            # Set security policy and endpoint
-            client.set_security_string(
-                f"Basic256Sha256,SignAndEncrypt,{self.client_cert_file},{self.client_key_file}"
-            )
+            if security_policy == "None":
+                # No security for older PLCs
+                client.set_security_string("None")
+                logger.info(f"Using no security for endpoint: {endpoint}")
+            else:
+                # Setup certificate-based security
+                security_string = f"{security_policy},SignAndEncrypt,{self.client_cert_file},{self.client_key_file}"
+                client.set_security_string(security_string)
+                
+                # Set trust store
+                if self.trust_store.exists():
+                    await client.load_trust_store(str(self.trust_store))
+                
+                # Set user identity (certificate-based)
+                client.set_user_identity_certificate(
+                    str(self.client_cert_file), 
+                    str(self.client_key_file)
+                )
+                
+                logger.info(f"Using security policy {security_policy} for endpoint: {endpoint}")
             
-            # Set trust store
-            if self.trust_store.exists():
-                await client.load_trust_store(str(self.trust_store))
-            
-            # Set user identity (certificate-based)
-            client.set_user_identity_certificate(
-                str(self.client_cert_file), 
-                str(self.client_key_file)
-            )
-            
-            logger.info(f"Security configured for endpoint: {endpoint}")
             return client
             
         except Exception as e:
@@ -99,29 +120,117 @@ class OPCUAClient:
             
             logger.info("Client certificates generated")
     
+    async def _negotiate_security_policy(self, endpoint: str, asset: Optional[AssetConfiguration] = None) -> str:
+        """Negotiate security policy with the server"""
+        # Check for explicit policy in configuration
+        if asset and hasattr(asset, 'security_settings'):
+            explicit_policy = asset.security_settings.get('security_policy')
+            if explicit_policy:
+                return explicit_policy
+        
+        # Check environment variable override
+        env_policy = os.getenv('OPCUA_SECURITY_POLICY')
+        if env_policy:
+            return env_policy
+        
+        # Try to negotiate with server
+        try:
+            # Create a temporary client to discover endpoints
+            temp_client = Client(url=endpoint)
+            
+            # Try with no security first to get endpoints
+            temp_client.set_security_string("None")
+            await temp_client.connect()
+            
+            # Get available endpoints
+            endpoints = await temp_client.get_endpoints()
+            await temp_client.disconnect()
+            
+            # Prefer Basic256Sha256 if available, fallback to None
+            for endpoint_desc in endpoints:
+                if hasattr(endpoint_desc, 'SecurityPolicyUri'):
+                    if 'Basic256Sha256' in endpoint_desc.SecurityPolicyUri:
+                        return 'Basic256Sha256'
+                    elif 'Basic128Rsa15' in endpoint_desc.SecurityPolicyUri:
+                        return 'Basic128Rsa15'
+            
+            # Fallback to no security
+            logger.warning(f"No compatible security policy found for {endpoint}, using None")
+            return "None"
+            
+        except Exception as e:
+            logger.warning(f"Failed to negotiate security policy for {endpoint}: {e}, using None")
+            return "None"
+    
+    def _calculate_retry_delay(self, asset_name: str) -> float:
+        """Calculate exponential backoff delay for reconnection"""
+        attempt = self.connection_attempts.get(asset_name, 0)
+        delay = min(self.base_retry_delay * (2 ** attempt), self.max_retry_delay)
+        
+        # Add jitter to prevent thundering herd
+        import random
+        jitter = random.uniform(0.1, 0.3) * delay
+        
+        return delay + jitter
+    
+    async def _should_retry_connection(self, asset_name: str) -> bool:
+        """Check if we should retry connection to an asset"""
+        attempt = self.connection_attempts.get(asset_name, 0)
+        
+        if attempt >= self.max_retry_attempts:
+            return False
+        
+        # Check if enough time has passed since last attempt
+        last_attempt = self.last_connection_attempt.get(asset_name, 0)
+        retry_delay = self._calculate_retry_delay(asset_name)
+        
+        return (time.time() - last_attempt) >= retry_delay
+    
     async def connect_to_asset(self, asset: AssetConfiguration) -> bool:
-        """Connect to a single asset's OPC UA server"""
+        """Connect to a single asset's OPC UA server with exponential backoff"""
+        asset_name = asset.asset_name
+        
+        # Check if we should retry
+        if not await self._should_retry_connection(asset_name):
+            logger.warning(f"Max retry attempts reached for {asset_name}, giving up")
+            return False
+        
         try:
             endpoint = asset.opcua_endpoint
-            logger.info(f"Connecting to asset: {asset.asset_name} at {endpoint}")
+            logger.info(f"Connecting to asset: {asset_name} at {endpoint} (attempt {self.connection_attempts.get(asset_name, 0) + 1})")
+            
+            # Update connection attempt tracking
+            self.connection_attempts[asset_name] = self.connection_attempts.get(asset_name, 0) + 1
+            self.last_connection_attempt[asset_name] = time.time()
             
             # Create client
             client = Client(url=endpoint)
             
-            # Setup security
-            client = await self.setup_security(client, endpoint)
+            # Setup security with dynamic negotiation
+            client = await self.setup_security(client, endpoint, asset)
+            
+            # Set connection timeout
+            conn_settings = get_connection_settings()
+            timeout = conn_settings.get('connection_timeout', 10.0)
+            client.set_timeout(timeout)
             
             # Connect
             await client.connect()
             
-            # Store client
-            self.clients[asset.asset_name] = client
+            # Store client and reset connection attempts on success
+            self.clients[asset_name] = client
+            self.connection_attempts[asset_name] = 0
             
-            logger.info(f"Successfully connected to {asset.asset_name}")
+            logger.info(f"Successfully connected to {asset_name}")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to connect to {asset.asset_name}: {e}")
+            logger.error(f"Failed to connect to {asset_name}: {e}")
+            
+            # Calculate next retry delay
+            retry_delay = self._calculate_retry_delay(asset_name)
+            logger.info(f"Next retry for {asset_name} in {retry_delay:.1f} seconds")
+            
             return False
     
     async def disconnect_from_asset(self, asset_name: str):
@@ -281,18 +390,32 @@ class OPCUAClient:
             
             logger.info(f"OPC UA Client started: {len(subscribed_assets)} assets connected and subscribed")
             
-            # Keep running
+            # Keep running with enhanced reconnection logic
             try:
                 while self.is_running:
-                    await asyncio.sleep(60)  # Check every minute
+                    await asyncio.sleep(30)  # Check every 30 seconds
                     
-                    # Reconnect any disconnected assets
+                    # Reconnection logic with exponential backoff
                     for site in self.config.sites:
                         for asset in site.assets:
-                            if asset.asset_name not in self.clients:
-                                logger.info(f"Attempting to reconnect to {asset.asset_name}")
-                                if await self.connect_to_asset(asset):
-                                    await self.subscribe_to_asset(asset)
+                            asset_name = asset.asset_name
+                            
+                            # Check if asset is disconnected
+                            if asset_name not in self.clients:
+                                # Check if we should retry
+                                if await self._should_retry_connection(asset_name):
+                                    logger.info(f"Attempting to reconnect to {asset_name}")
+                                    if await self.connect_to_asset(asset):
+                                        await self.subscribe_to_asset(asset)
+                            else:
+                                # Check if existing connection is still alive
+                                try:
+                                    client = self.clients[asset_name]
+                                    # Simple health check - try to get namespace array
+                                    await client.get_namespace_array()
+                                except Exception as e:
+                                    logger.warning(f"Connection to {asset_name} appears dead: {e}")
+                                    await self.disconnect_from_asset(asset_name)
                     
             except asyncio.CancelledError:
                 logger.info("OPC UA Client shutdown requested")
