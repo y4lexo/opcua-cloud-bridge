@@ -1,4 +1,4 @@
-enterprise_name: "GlobalCorp"
+enterprise_name: "GlobalEnergy"
 version: "1.0.0"
 
 global_settings:
@@ -8,90 +8,191 @@ global_settings:
   timeout_seconds: 30
 
 sites:
-  - site_name: "Site-A"
-    enterprise: "GlobalCorp"
-    description: "Main manufacturing facility for beverage production"
+  - site_name: "SolarFarm-A"
+    enterprise: "GlobalEnergy"
+    description: "Main solar energy generation facility with battery storage"
     default_sampling_rate: 500
     buffer_size: 15000
     assets:
-      - asset_name: "FillerMachine-01"
-        description: "Automated beverage filling machine with integrated quality control"
+      - asset_name: "Solar_Inverter_01"
+        description: "500kW solar inverter with MPPT tracking and grid integration"
         opcua_endpoint: "opc.tcp://192.168.1.100:4840"
         node_mapping:
-          MotorSpeed: "ns=2;i=1001"
-          MachineState: "ns=2;i=1002"
-          CycleCount: "ns=2;i=1003"
-          Vibration: "ns=2;i=1004"
-          Temperature: "ns=2;i=1005"
-          Pressure: "ns=2;i=1006"
-          PowerConsumption: "ns=2;i=1007"
-          ProductionRate: "ns=2;i=1008"
-          QualityStatus: "ns=2;i=1009"
+          Voltage_L1: "ns=2;i=1001"
+          Voltage_L2: "ns=2;i=1002"
+          Voltage_L3: "ns=2;i=1003"
+          Current_L1: "ns=2;i=1004"
+          Current_L2: "ns=2;i=1005"
+          Current_L3: "ns=2;i=1006"
+          Power_Active: "ns=2;i=1007"
+          Power_Reactive: "ns=2;i=1008"
+          Energy_Total: "ns=2;i=1009"
+          Frequency: "ns=2;i=1010"
+          Temperature: "ns=2;i=1011"
+          Inverter_State: "ns=2;i=1012"
+          Irradiance: "ns=2;i=1013"
+          Efficiency: "ns=2;i=1014"
         
         # Energy Monitoring Configuration
         energy_monitoring:
-          power_tags: ["PowerConsumption"]
-          energy_tags: []  # To be added later
-          voltage_tags: []  # To be added later
-          current_tags: []  # To be added later
+          power_tags: ["Power_Active"]
+          energy_tags: ["Energy_Total"]
+          voltage_tags: ["Voltage_L1", "Voltage_L2", "Voltage_L3"]
+          current_tags: ["Current_L1", "Current_L2", "Current_L3"]
           aggregation_interval: 300
         
-        # OEE Monitoring Configuration
-        oee_monitoring:
-          availability_tags: ["MachineState"]
-          performance_tags: ["MotorSpeed", "ProductionRate"]
-          quality_tags: ["QualityStatus"]
-          cycle_count_tag: "CycleCount"
-          production_rate_tag: "ProductionRate"
+        # Energy Analytics Configuration
+        energy_analytics:
+          efficiency_tags: ["Efficiency"]
+          renewable_tags: ["Irradiance"]
+          battery_tags: []
+          load_tags: []
+          aggregation_interval: 300
         
         # Predictive Maintenance Configuration
         predictive_maintenance:
-          vibration_tags: ["Vibration"]
           temperature_tags: ["Temperature"]
-          pressure_tags: ["Pressure"]
+          vibration_tags: []
           maintenance_thresholds:
-            Vibration: 5.0
-            Temperature: 80.0
-            Pressure: 10.0
+            Temperature: 85.0
           prediction_horizon: 24
         
         metadata:
-          manufacturer: "FillTech Industries"
-          model: "FT-2000X"
+          manufacturer: "SolarTech Industries"
+          model: "ST-500KW-MPPT"
           installation_date: "2023-01-15"
-          area: "AssemblyLine"
-          line: "Production-Line-1"
-          capacity_bottles_per_hour: 12000
+          area: "Generation"
+          line: "Solar-Array-1"
+          capacity_kw: 500
+          panel_count: 1500
 
-  - site_name: "Site-B"
-    enterprise: "GlobalCorp"
-    description: "Secondary packaging and distribution facility"
+  - site_name: "BatteryStorage-A"
+    enterprise: "GlobalEnergy"
+    description: "Battery energy storage system for grid stabilization"
     default_sampling_rate: 1000
     buffer_size: 10000
     assets:
-      - asset_name: "PackagingMachine-01"
-        description: "Automated packaging machine for final product packaging"
+      - asset_name: "Battery_Storage_01"
+        description: "1MWh lithium-ion battery storage system with grid services"
         opcua_endpoint: "opc.tcp://192.168.2.100:4840"
         node_mapping:
-          MotorSpeed: "ns=2;i=2001"
-          MachineState: "ns=2;i=2002"
-          CycleCount: "ns=2;i=2003"
-          ConveyorSpeed: "ns=2;i=2004"
-          PackageCount: "ns=2;i=2005"
+          Voltage: "ns=2;i=2001"
+          Current: "ns=2;i=2002"
+          Power_Charge: "ns=2;i=2003"
+          Power_Discharge: "ns=2;i=2004"
+          Energy_Charged: "ns=2;i=2005"
+          Energy_Discharged: "ns=2;i=2006"
+          SoC: "ns=2;i=2007"
+          Temperature_Cell: "ns=2;i=2008"
+          Temperature_Ambient: "ns=2;i=2009"
+          Battery_State: "ns=2;i=2010"
+          Cycle_Count: "ns=2;i=2011"
+          Health_Index: "ns=2;i=2012"
           
         energy_monitoring:
-          power_tags: []
+          power_tags: ["Power_Charge", "Power_Discharge"]
+          energy_tags: ["Energy_Charged", "Energy_Discharged"]
+          voltage_tags: ["Voltage"]
+          current_tags: ["Current"]
           aggregation_interval: 300
           
-        oee_monitoring:
-          availability_tags: ["MachineState"]
-          performance_tags: ["MotorSpeed", "ConveyorSpeed"]
-          quality_tags: []
-          cycle_count_tag: "CycleCount"
+        energy_analytics:
+          efficiency_tags: ["Health_Index"]
+          battery_tags: ["SoC", "Cycle_Count"]
+          load_tags: []
+          aggregation_interval: 300
+          
+        predictive_maintenance:
+          temperature_tags: ["Temperature_Cell", "Temperature_Ambient"]
+          maintenance_thresholds:
+            Temperature_Cell: 40.0
+            Temperature_Ambient: 35.0
+          prediction_horizon: 24
           
         metadata:
-          manufacturer: "PackTech Solutions"
-          model: "PT-1500"
+          manufacturer: "BatteryPro Systems"
+          model: "BP-1MWH-LI"
           installation_date: "2023-03-20"
-          area: "Packaging"
-          line: "Packaging-Line-1"
+          area: "Storage"
+          line: "Battery-Bank-1"
+          capacity_kwh: 1000
+          chemistry: "Lithium-Ion"
+
+  - site_name: "CommercialSite-A"
+    enterprise: "GlobalEnergy"
+    description: "Commercial building with smart meter and load management"
+    default_sampling_rate: 1000
+    buffer_size: 10000
+    assets:
+      - asset_name: "Smart_Meter_Grid"
+        description: "Advanced smart metering system for grid interface monitoring"
+        opcua_endpoint: "opc.tcp://192.168.3.100:4840"
+        node_mapping:
+          Voltage_L1: "ns=2;i=3001"
+          Voltage_L2: "ns=2;i=3002"
+          Voltage_L3: "ns=2;i=3003"
+          Current_L1: "ns=2;i=3004"
+          Current_L2: "ns=2;i=3005"
+          Current_L3: "ns=2;i=3006"
+          Power_Import: "ns=2;i=3007"
+          Power_Export: "ns=2;i=3008"
+          Energy_Import_Total: "ns=2;i=3009"
+          Energy_Export_Total: "ns=2;i=3010"
+          Power_Factor: "ns=2;i=3011"
+          Frequency: "ns=2;i=3012"
+          Meter_State: "ns=2;i=3013"
+          
+        energy_monitoring:
+          power_tags: ["Power_Import", "Power_Export"]
+          energy_tags: ["Energy_Import_Total", "Energy_Export_Total"]
+          voltage_tags: ["Voltage_L1", "Voltage_L2", "Voltage_L3"]
+          current_tags: ["Current_L1", "Current_L2", "Current_L3"]
+          aggregation_interval: 300
+          
+        energy_analytics:
+          efficiency_tags: ["Power_Factor"]
+          load_tags: ["Power_Import"]
+          aggregation_interval: 300
+          
+        metadata:
+          manufacturer: "MeterTech Solutions"
+          model: "MT-3PH-SMART"
+          installation_date: "2023-02-10"
+          area: "Grid-Interface"
+          line: "Main-Feed"
+          rated_voltage: 400
+          rated_current: 2500
+
+      - asset_name: "Load_Panel_A"
+        description: "Main load distribution panel for commercial building"
+        opcua_endpoint: "opc.tcp://192.168.3.101:4840"
+        node_mapping:
+          Voltage_L1: "ns=2;i=4001"
+          Voltage_L2: "ns=2;i=4002"
+          Voltage_L3: "ns=2;i=4003"
+          Current_Total: "ns=2;i=4004"
+          Power_Total: "ns=2;i=4005"
+          Energy_Total: "ns=2;i=4006"
+          THD_Voltage: "ns=2;i=4007"
+          THD_Current: "ns=2;i=4008"
+          Panel_State: "ns=2;i=4009"
+          
+        energy_monitoring:
+          power_tags: ["Power_Total"]
+          energy_tags: ["Energy_Total"]
+          voltage_tags: ["Voltage_L1", "Voltage_L2", "Voltage_L3"]
+          current_tags: ["Current_Total"]
+          aggregation_interval: 300
+          
+        energy_analytics:
+          load_tags: ["Power_Total"]
+          efficiency_tags: ["THD_Voltage", "THD_Current"]
+          aggregation_interval: 300
+          
+        metadata:
+          manufacturer: "LoadPro Electrical"
+          model: "LP-3PH-800A"
+          installation_date: "2023-02-15"
+          area: "Distribution"
+          line: "Main-Panel"
+          rated_current: 800

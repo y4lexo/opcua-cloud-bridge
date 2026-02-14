@@ -39,8 +39,17 @@ class EnergyMonitoringConfig(BaseModel):
     aggregation_interval: int = Field(300, description="Aggregation interval in seconds")
 
 
+class EnergyAnalyticsConfig(BaseModel):
+    """Configuration for energy analytics use case"""
+    efficiency_tags: List[str] = Field(default_factory=list, description="Energy efficiency metric tags")
+    renewable_tags: List[str] = Field(default_factory=list, description="Renewable energy generation tags")
+    battery_tags: List[str] = Field(default_factory=list, description="Battery storage metrics tags")
+    load_tags: List[str] = Field(default_factory=list, description="Load consumption tags")
+    aggregation_interval: int = Field(300, description="Aggregation interval in seconds")
+
+
 class OEEConfig(BaseModel):
-    """Configuration for Overall Equipment Effectiveness monitoring"""
+    """Configuration for Overall Equipment Effectiveness monitoring (Legacy/Optional)"""
     availability_tags: List[str] = Field(default_factory=list, description="Machine availability status tags")
     performance_tags: List[str] = Field(default_factory=list, description="Machine performance metrics tags")
     quality_tags: List[str] = Field(default_factory=list, description="Product quality metrics tags")
@@ -66,7 +75,8 @@ class AssetConfiguration(BaseModel):
     
     # Use case configurations
     energy_monitoring: Optional[EnergyMonitoringConfig] = Field(None, description="Energy monitoring configuration")
-    oee_monitoring: Optional[OEEConfig] = Field(None, description="OEE monitoring configuration")
+    energy_analytics: Optional[EnergyAnalyticsConfig] = Field(None, description="Energy analytics configuration")
+    oee_monitoring: Optional[OEEConfig] = Field(None, description="OEE monitoring configuration (Legacy/Optional)")
     predictive_maintenance: Optional[PredictiveMaintenanceConfig] = Field(None, description="Predictive maintenance configuration")
     
     # Additional metadata

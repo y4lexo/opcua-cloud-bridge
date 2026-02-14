@@ -129,13 +129,11 @@ class OPCUASimulationServer:
         """Determine OPC UA variant type based on tag name"""
         tag_lower = tag_name.lower()
         
-        if any(keyword in tag_lower for keyword in ['speed', 'vibration', 'temperature', 'pressure', 'rate']):
+        if any(keyword in tag_lower for keyword in ['voltage', 'current', 'power', 'energy', 'frequency', 'efficiency', 'irradiance', 'soc', 'thd']):
             return ua.VariantType.Double
         elif any(keyword in tag_lower for keyword in ['count', 'cycle']):
             return ua.VariantType.UInt32
-        elif 'state' in tag_lower:
-            return ua.VariantType.String
-        elif 'status' in tag_lower:
+        elif any(keyword in tag_lower for keyword in ['state', 'status']):
             return ua.VariantType.String
         else:
             return ua.VariantType.Double
@@ -159,82 +157,214 @@ class OPCUASimulationServer:
                 await asyncio.sleep(5.0)
     
     async def _generate_simulated_value(self, var_key: str, var_info: Dict, current_time: float) -> Any:
-        """Generate realistic simulated values for different tag types"""
+        """Generate realistic simulated values for energy equipment"""
         tag_name = var_info['tag']
         asset = var_info['asset']
         
-        # Motor speed simulation (RPM with realistic variations)
-        if 'MotorSpeed' in tag_name:
-            base_speed = 1800.0
-            variation = random.uniform(-50, 50)
-            noise = random.uniform(-5, 5)
-            return base_speed + variation + noise
+        # Solar inverter voltage simulation (3-phase, 400V nominal)
+        if 'Voltage_L' in tag_name:
+            nominal_voltage = 400.0 / 1.732  # Phase voltage for 400V 3-phase
+            variation = random.uniform(-5, 5)  # ±5% variation
+            harmonic_distortion = random.uniform(-2, 2)
+            return nominal_voltage + variation + harmonic_distortion
         
-        # Vibration simulation (mm/s with occasional spikes)
-        elif 'Vibration' in tag_name:
-            base_vibration = 2.0
-            if random.random() < 0.05:  # 5% chance of spike
-                return random.uniform(8.0, 12.0)
-            return base_vibration + random.uniform(-0.5, 0.5)
+        # Solar inverter current simulation (proportional to irradiance)
+        elif 'Current_L' in tag_name:
+            base_current = 720.0  # Approximate current for 500kW at 400V
+            irradiance_factor = 0.3 + 0.7 * (0.5 + 0.5 * (current_time % 86400) / 43200)  # Day/night cycle
+            variation = random.uniform(-10, 10)
+            return max(0, base_current * irradiance_factor + variation)
         
-        # Temperature simulation (Celsius with daily cycle)
-        elif 'Temperature' in tag_name:
-            base_temp = 45.0
-            daily_cycle = 5.0 * (0.5 - 0.5 * (current_time % 86400) / 43200)  # Sinusoidal daily variation
+        # Solar active power simulation (kW, follows irradiance)
+        elif 'Power_Active' in tag_name:
+            base_power = 500.0  # 500kW inverter
+            # Realistic daily solar generation curve
+            hour_of_day = (current_time % 86400) / 3600
+            if 6 <= hour_of_day <= 18:  # Daylight hours
+                solar_factor = 0.9 * (1 - ((hour_of_day - 12) / 6) ** 2)  # Parabolic curve
+            else:
+                solar_factor = 0.0
+            cloud_cover = random.uniform(0.8, 1.0)  # Random cloud cover
+            return base_power * solar_factor * cloud_cover
+        
+        # Solar reactive power simulation (kVAR)
+        elif 'Power_Reactive' in tag_name:
+            active_power = await self._get_related_value(var_key, 'Power_Active', current_time)
+            power_factor = random.uniform(0.95, 0.99)
+            return active_power * (1 - power_factor) / power_factor
+        
+        # Solar energy total simulation (kWh, cumulative)
+        elif 'Energy_Total' in tag_name:
+            current_value = await var_info['node'].read_value()
+            if isinstance(current_value, (int, float)):
+                power_kw = await self._get_related_value(var_key, 'Power_Active', current_time)
+                increment = power_kw / 3600  # kWh per second
+                return current_value + increment
+            return 0.0
+        
+        # Grid frequency simulation (Hz)
+        elif 'Frequency' in tag_name:
+            nominal_freq = 50.0
+            grid_stability = random.uniform(-0.1, 0.1)
+            return nominal_freq + grid_stability
+        
+        # Solar inverter efficiency simulation (%)
+        elif 'Efficiency' in tag_name:
+            base_efficiency = 96.0
+            load_factor = random.uniform(0.8, 1.0)
+            temperature_derating = random.uniform(-2, 0)
+            return base_efficiency * load_factor + temperature_derating
+        
+        # Solar irradiance simulation (W/m²)
+        elif 'Irradiance' in tag_name:
+            hour_of_day = (current_time % 86400) / 3600
+            if 6 <= hour_of_day <= 18:
+                base_irradiance = 800 * (1 - ((hour_of_day - 12) / 6) ** 2)
+                cloud_factor = random.uniform(0.7, 1.0)
+                return base_irradiance * cloud_factor
+            else:
+                return 0.0
+        
+        # Battery voltage simulation (V)
+        elif 'Voltage' in tag_name and 'Battery' in asset.asset_name:
+            base_voltage = 800.0  # 800V battery system
+            soc_factor = random.uniform(0.95, 1.05)
+            return base_voltage * soc_factor
+        
+        # Battery current simulation (A, positive for charge, negative for discharge)
+        elif 'Current' in tag_name and 'Battery' in asset.asset_name:
+            if 'Power_Charge' in asset.node_mapping:
+                charge_power = await self._get_related_value(var_key, 'Power_Charge', current_time)
+                discharge_power = await self._get_related_value(var_key, 'Power_Discharge', current_time)
+                net_power = discharge_power - charge_power
+                return net_power / 800.0  # Current = Power/Voltage
+            return random.uniform(-100, 100)
+        
+        # Battery charge power simulation (kW)
+        elif 'Power_Charge' in tag_name:
+            base_charge = 200.0
+            solar_excess = random.uniform(0, 1)  # Solar excess available
+            return base_charge * solar_excess
+        
+        # Battery discharge power simulation (kW)
+        elif 'Power_Discharge' in tag_name:
+            base_discharge = 250.0
+            demand_factor = random.uniform(0, 1)  # Grid demand
+            return base_discharge * demand_factor
+        
+        # Battery State of Charge simulation (%)
+        elif 'SoC' in tag_name:
+            current_value = await var_info['node'].read_value()
+            if isinstance(current_value, (int, float)):
+                charge_power = await self._get_related_value(var_key, 'Power_Charge', current_time)
+                discharge_power = await self._get_related_value(var_key, 'Power_Discharge', current_time)
+                net_power = charge_power - discharge_power
+                soc_change = (net_power / 1000.0) / 3600  # SoC change per second
+                new_soc = current_value + soc_change
+                return max(10, min(90, new_soc))  # Limit between 10% and 90%
+            return 50.0
+        
+        # Battery temperature simulation (°C)
+        elif 'Temperature_Cell' in tag_name:
+            base_temp = 25.0
+            current = await self._get_related_value(var_key, 'Current', current_time)
+            heating = abs(current) * 0.02  # Temperature rise due to current
+            ambient = random.uniform(15, 30)
+            return base_temp + heating + ambient - 20
+        
+        # Ambient temperature simulation (°C)
+        elif 'Temperature_Ambient' in tag_name:
+            hour_of_day = (current_time % 86400) / 3600
+            daily_cycle = 10 * (0.5 - 0.5 * (hour_of_day - 14) / 10)
+            base_temp = 20.0
             return base_temp + daily_cycle + random.uniform(-2, 2)
         
-        # Pressure simulation (Bar)
-        elif 'Pressure' in tag_name:
-            base_pressure = 6.0
-            return base_pressure + random.uniform(-0.3, 0.3)
-        
-        # Cycle count simulation (incrementing counter)
-        elif 'CycleCount' in tag_name:
+        # Battery health index simulation (%)
+        elif 'Health_Index' in tag_name:
             current_value = await var_info['node'].read_value()
             if isinstance(current_value, (int, float)):
-                increment = random.randint(1, 3)
-                return int(current_value) + increment
-            return 1
+                degradation = 0.0001  # Very slow degradation
+                return max(80, current_value - degradation)
+            return 98.0
         
-        # Machine state simulation
-        elif 'MachineState' in tag_name:
-            states = ["Running", "Idle", "Starting", "Stopping", "Maintenance"]
-            weights = [0.7, 0.15, 0.05, 0.05, 0.05]
+        # Smart meter power import simulation (kW)
+        elif 'Power_Import' in tag_name:
+            base_load = 300.0  # 300kW commercial load
+            time_factor = 1.0 + 0.3 * (0.5 - 0.5 * ((current_time % 86400) / 3600 - 12) / 12)
+            return base_load * time_factor + random.uniform(-20, 20)
+        
+        # Smart meter power export simulation (kW)
+        elif 'Power_Export' in tag_name:
+            solar_generation = 400.0 * (0.5 + 0.5 * (current_time % 86400) / 43200)
+            building_load = await self._get_related_value(var_key, 'Power_Import', current_time)
+            net_export = max(0, solar_generation - building_load)
+            return net_export
+        
+        # Energy cumulative counters
+        elif any(keyword in tag_name for keyword in ['Energy_Total', 'Energy_Import_Total', 'Energy_Export_Total', 'Energy_Charged', 'Energy_Discharged']):
+            current_value = await var_info['node'].read_value()
+            if isinstance(current_value, (int, float)):
+                # Find corresponding power value
+                power_tag = tag_name.replace('Energy_Total', 'Power_Total').replace('Energy_Import_Total', 'Power_Import').replace('Energy_Export_Total', 'Power_Export').replace('Energy_Charged', 'Power_Charge').replace('Energy_Discharged', 'Power_Discharge')
+                power_value = await self._get_related_value(var_key, power_tag, current_time)
+                increment = abs(power_value) / 3600 if power_value else 0
+                return current_value + increment
+            return 0.0
+        
+        # Power factor simulation
+        elif 'Power_Factor' in tag_name:
+            return random.uniform(0.95, 0.99)
+        
+        # Total harmonic distortion simulation (%)
+        elif 'THD' in tag_name:
+            return random.uniform(2, 5)  # 2-5% THD is typical
+        
+        # Load panel power simulation (kW)
+        elif 'Power_Total' in tag_name and 'Load' in asset.asset_name:
+            base_load = 250.0
+            time_factor = 1.0 + 0.4 * (0.5 - 0.5 * ((current_time % 86400) / 3600 - 14) / 10)
+            return base_load * time_factor + random.uniform(-15, 15)
+        
+        # Equipment state simulation
+        elif any(keyword in tag_name for keyword in ['Inverter_State', 'Battery_State', 'Meter_State', 'Panel_State']):
+            states = ["Running", "Standby", "Fault", "Maintenance"]
+            weights = [0.85, 0.10, 0.03, 0.02]
             return random.choices(states, weights=weights)[0]
         
-        # Production rate simulation
-        elif 'ProductionRate' in tag_name:
-            base_rate = 200.0  # units per hour
-            efficiency = random.uniform(0.85, 1.05)
-            return base_rate * efficiency
-        
-        # Power consumption simulation (kW)
-        elif 'PowerConsumption' in tag_name:
-            base_power = 15.0
-            load_factor = random.uniform(0.8, 1.2)
-            return base_power * load_factor
-        
-        # Quality status simulation
-        elif 'QualityStatus' in tag_name:
-            statuses = ["Good", "Warning", "Error"]
-            weights = [0.92, 0.07, 0.01]
-            return random.choices(statuses, weights=weights)[0]
-        
-        # Conveyor speed simulation
-        elif 'ConveyorSpeed' in tag_name:
-            base_speed = 1.5  # m/s
-            return base_speed + random.uniform(-0.1, 0.1)
-        
-        # Package count simulation
-        elif 'PackageCount' in tag_name:
+        # Cycle count simulation (incrementing counter)
+        elif 'Cycle_Count' in tag_name:
             current_value = await var_info['node'].read_value()
             if isinstance(current_value, (int, float)):
-                return int(current_value) + random.randint(1, 2)
-            return 1
+                increment = random.randint(0, 1)  # Battery cycles are slow
+                return int(current_value) + increment
+            return 0
+        
+        # Temperature simulation (general)
+        elif 'Temperature' in tag_name and 'Battery' not in asset.asset_name:
+            base_temp = 35.0
+            daily_cycle = 15 * (0.5 - 0.5 * (current_time % 86400) / 43200)
+            return base_temp + daily_cycle + random.uniform(-3, 3)
         
         # Default simulation
         else:
             return random.uniform(0, 100)
+    
+    async def _get_related_value(self, var_key: str, related_tag: str, current_time: float) -> float:
+        """Get value from a related tag for simulation consistency"""
+        # Find the related variable
+        asset_name = var_key.split('.')[0]
+        related_key = f"{asset_name}.{related_tag}"
+        
+        if related_key in self.node_variables:
+            related_var = self.node_variables[related_key]
+            try:
+                value = await related_var['node'].read_value()
+                return float(value) if isinstance(value, (int, float)) else 0.0
+            except:
+                pass
+        
+        # Return a default value if related tag not found
+        return 0.0
     
     async def start(self):
         """Start the OPC UA server"""

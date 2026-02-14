@@ -17,6 +17,7 @@ from data_models import (
     TelemetryPoint, 
     Quality, 
     EnergyMonitoringConfig, 
+    EnergyAnalyticsConfig,
     OEEConfig, 
     PredictiveMaintenanceConfig,
     AssetConfiguration
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class OEEAnalytics:
-    """Overall Equipment Effectiveness analytics processor"""
+    """Overall Equipment Effectiveness analytics processor (Legacy/Optional)"""
     
     def __init__(self, config: OEEConfig):
         self.config = config
@@ -115,6 +116,159 @@ class OEEAnalytics:
                 'overall_oee': 0.0,
                 'running_time_percentage': 0.0
             }
+
+
+class EnergyKPIAnalytics:
+    """Energy-focused KPI analytics processor for renewable energy, storage, and efficiency metrics"""
+    
+    def __init__(self, config: EnergyAnalyticsConfig):
+        self.config = config
+        self.efficiency_data = deque(maxlen=7200)  # 2 hours at 1-second intervals
+        self.renewable_data = deque(maxlen=7200)
+        self.battery_data = deque(maxlen=7200)
+        self.load_data = deque(maxlen=7200)
+        self.last_aggregation = datetime.utcnow()
+        
+        # Energy accumulation tracking
+        self.renewable_energy_total = 0.0
+        self.battery_energy_charged = 0.0
+        self.battery_energy_discharged = 0.0
+        self.load_energy_total = 0.0
+        
+    def process_telemetry(self, point: TelemetryPoint) -> Optional[Dict[str, float]]:
+        """Process telemetry point and return energy KPI analytics"""
+        timestamp = point.timestamp
+        value = point.value
+        tag = point.tag
+        
+        # Process efficiency data
+        if tag in self.config.efficiency_tags and isinstance(value, (int, float)):
+            self.efficiency_data.append((timestamp, float(value)))
+        
+        # Process renewable generation data
+        elif tag in self.config.renewable_tags and isinstance(value, (int, float)):
+            self.renewable_data.append((timestamp, float(value)))
+        
+        # Process battery storage data
+        elif tag in self.config.battery_tags and isinstance(value, (int, float)):
+            self.battery_data.append((timestamp, float(value)))
+        
+        # Process load consumption data
+        elif tag in self.config.load_tags and isinstance(value, (int, float)):
+            self.load_data.append((timestamp, float(value)))
+        
+        # Check if it's time to aggregate KPIs
+        current_time = datetime.utcnow()
+        if (current_time - self.last_aggregation).total_seconds() >= self.config.aggregation_interval:
+            self.last_aggregation = current_time
+            return self.calculate_energy_kpis()
+        
+        return None
+    
+    def calculate_energy_kpis(self) -> Dict[str, float]:
+        """Calculate comprehensive energy KPIs"""
+        try:
+            kpis = {}
+            
+            # Renewable Generation KPIs
+            if self.renewable_data:
+                recent_renewable = [val for _, val in list(self.renewable_data)[-300:]]  # Last 5 minutes
+                if recent_renewable:
+                    avg_renewable = statistics.mean(recent_renewable)
+                    peak_renewable = max(recent_renewable)
+                    renewable_energy = (avg_renewable * self.config.aggregation_interval) / 3600
+                    self.renewable_energy_total += renewable_energy
+                    
+                    kpis.update({
+                        'avg_renewable_power_kw': round(avg_renewable, 3),
+                        'peak_renewable_power_kw': round(peak_renewable, 3),
+                        'renewable_energy_kwh': round(renewable_energy, 3),
+                        'total_renewable_energy_kwh': round(self.renewable_energy_total, 3)
+                    })
+            
+            # Battery Storage KPIs
+            if self.battery_data:
+                recent_battery = [val for _, val in list(self.battery_data)[-300:]]
+                if recent_battery:
+                    avg_soc = statistics.mean(recent_battery)
+                    min_soc = min(recent_battery)
+                    max_soc = max(recent_battery)
+                    
+                    # Calculate round-trip efficiency if we have charge/discharge data
+                    round_trip_efficiency = self.calculate_battery_efficiency()
+                    
+                    kpis.update({
+                        'avg_battery_soc_percent': round(avg_soc, 2),
+                        'min_battery_soc_percent': round(min_soc, 2),
+                        'max_battery_soc_percent': round(max_soc, 2),
+                        'battery_round_trip_efficiency_percent': round(round_trip_efficiency, 2),
+                        'battery_utilization_percent': round((max_soc - min_soc), 2)
+                    })
+            
+            # Load Consumption KPIs
+            if self.load_data:
+                recent_load = [val for _, val in list(self.load_data)[-300:]]
+                if recent_load:
+                    avg_load = statistics.mean(recent_load)
+                    peak_load = max(recent_load)
+                    load_energy = (avg_load * self.config.aggregation_interval) / 3600
+                    self.load_energy_total += load_energy
+                    
+                    # Load factor calculation
+                    load_factor = (avg_load / peak_load) * 100 if peak_load > 0 else 0
+                    
+                    kpis.update({
+                        'avg_load_power_kw': round(avg_load, 3),
+                        'peak_load_power_kw': round(peak_load, 3),
+                        'load_energy_kwh': round(load_energy, 3),
+                        'total_load_energy_kwh': round(self.load_energy_total, 3),
+                        'load_factor_percent': round(load_factor, 2)
+                    })
+            
+            # System Efficiency KPIs
+            if self.efficiency_data:
+                recent_efficiency = [val for _, val in list(self.efficiency_data)[-300:]]
+                if recent_efficiency:
+                    avg_efficiency = statistics.mean(recent_efficiency)
+                    kpis['avg_system_efficiency_percent'] = round(avg_efficiency, 2)
+            
+            # Renewable Share KPI
+            if 'avg_renewable_power_kw' in kpis and 'avg_load_power_kw' in kpis:
+                renewable_share = (kpis['avg_renewable_power_kw'] / 
+                                 max(kpis['avg_load_power_kw'], 0.1)) * 100
+                kpis['renewable_share_percent'] = round(min(renewable_share, 100), 2)
+            
+            # Energy Independence KPI
+            if 'total_renewable_energy_kwh' in kpis and 'total_load_energy_kwh' in kpis:
+                energy_independence = (kpis['total_renewable_energy_kwh'] / 
+                                    max(kpis['total_load_energy_kwh'], 0.1)) * 100
+                kpis['energy_independence_percent'] = round(min(energy_independence, 100), 2)
+            
+            return kpis
+            
+        except Exception as e:
+            logger.error(f"Error calculating energy KPIs: {e}")
+            return {}
+    
+    def calculate_battery_efficiency(self) -> float:
+        """Calculate battery round-trip efficiency"""
+        try:
+            # This is a simplified calculation - in practice, you'd need charge/discharge energy data
+            if self.battery_data:
+                recent_soc = [val for _, val in list(self.battery_data)[-300:]]
+                if len(recent_soc) > 60:  # Need at least 1 minute of data
+                    soc_variance = statistics.stdev(recent_soc) if len(recent_soc) > 1 else 0
+                    # Higher variance suggests active charging/discharging
+                    # Assume 95% base efficiency with degradation based on variance
+                    base_efficiency = 95.0
+                    efficiency_penalty = min(soc_variance * 2, 10)  # Max 10% penalty
+                    return base_efficiency - efficiency_penalty
+            
+            return 95.0  # Default battery efficiency
+            
+        except Exception as e:
+            logger.error(f"Error calculating battery efficiency: {e}")
+            return 95.0
 
 
 class EnergyAnalytics:
@@ -213,7 +367,7 @@ class EnergyAnalytics:
 
 
 class PredictiveAnalytics:
-    """Predictive maintenance analytics with anomaly detection"""
+    """Predictive maintenance analytics with energy-specific anomaly detection"""
     
     def __init__(self, config: PredictiveMaintenanceConfig):
         self.config = config
@@ -221,6 +375,14 @@ class PredictiveAnalytics:
         self.baseline_stats = defaultdict(dict)
         self.anomaly_threshold_multiplier = 2.5  # Standard deviations
         self.baseline_calculated = False
+        
+        # Energy-specific anomaly patterns
+        self.energy_anomaly_patterns = {
+            'battery_soc_drop': {'threshold': 20.0, 'window': 300},  # 20% SoC drop in 5 minutes
+            'power_spike': {'threshold': 2.0, 'window': 60},       # 2x power spike in 1 minute
+            'efficiency_drop': {'threshold': 15.0, 'window': 600},   # 15% efficiency drop in 10 minutes
+            'voltage_deviation': {'threshold': 10.0, 'window': 120}   # 10% voltage deviation in 2 minutes
+        }
         
     def process_telemetry(self, point: TelemetryPoint) -> Optional[Dict[str, Any]]:
         """Process telemetry point and return predictive analytics"""
@@ -273,7 +435,7 @@ class PredictiveAnalytics:
             logger.error(f"Error calculating baseline for {tag}: {e}")
     
     def detect_anomalies(self, tag: str, current_value: float, timestamp: datetime) -> Dict[str, Any]:
-        """Detect anomalies using rolling window statistics"""
+        """Detect energy-specific anomalies using rolling window statistics"""
         try:
             if tag not in self.baseline_stats:
                 return {}
@@ -297,6 +459,9 @@ class PredictiveAnalytics:
                 threshold = self.config.maintenance_thresholds[tag]
                 threshold_anomaly = current_value > threshold
             
+            # Energy-specific anomaly detection
+            energy_anomalies = self.detect_energy_anomalies(tag, current_value, timestamp)
+            
             # Calculate trend (simple linear regression on last 30 points)
             trend = self.calculate_trend(tag)
             
@@ -310,6 +475,7 @@ class PredictiveAnalytics:
                 'z_score': round(z_score, 3),
                 'is_anomaly': is_anomaly,
                 'threshold_anomaly': threshold_anomaly,
+                'energy_anomalies': energy_anomalies,
                 'trend': round(trend, 4),
                 'maintenance_score': round(maintenance_score, 2),
                 'prediction_horizon_hours': self.config.prediction_horizon,
@@ -319,6 +485,86 @@ class PredictiveAnalytics:
         except Exception as e:
             logger.error(f"Error detecting anomalies for {tag}: {e}")
             return {}
+    
+    def detect_energy_anomalies(self, tag: str, current_value: float, timestamp: datetime) -> Dict[str, Any]:
+        """Detect energy-specific anomaly patterns"""
+        anomalies = {}
+        
+        try:
+            data_window = list(self.data_windows[tag])
+            
+            # Battery SoC rapid drop detection
+            if 'soc' in tag.lower() or 'battery' in tag.lower():
+                if len(data_window) >= 300:  # 5 minutes of data
+                    recent_values = [val for _, val in data_window[-300:]]
+                    older_values = [val for _, val in data_window[-600:-300]] if len(data_window) >= 600 else []
+                    
+                    if older_values:
+                        avg_recent = statistics.mean(recent_values)
+                        avg_older = statistics.mean(older_values)
+                        soc_drop = avg_older - avg_recent
+                        
+                        if soc_drop > self.energy_anomaly_patterns['battery_soc_drop']['threshold']:
+                            anomalies['battery_soc_drop'] = {
+                                'detected': True,
+                                'drop_percent': round(soc_drop, 2),
+                                'severity': 'high' if soc_drop > 30 else 'medium'
+                            }
+            
+            # Power spike detection
+            elif 'power' in tag.lower():
+                if len(data_window) >= 60:  # 1 minute of data
+                    recent_values = [val for _, val in data_window[-60:]]
+                    baseline_avg = statistics.mean([val for _, val in data_window[-300:-60]]) if len(data_window) >= 300 else current_value
+                    
+                    max_recent = max(recent_values)
+                    spike_ratio = max_recent / baseline_avg if baseline_avg > 0 else 1
+                    
+                    if spike_ratio > self.energy_anomaly_patterns['power_spike']['threshold']:
+                        anomalies['power_spike'] = {
+                            'detected': True,
+                            'spike_ratio': round(spike_ratio, 2),
+                            'peak_power': round(max_recent, 3),
+                            'severity': 'high' if spike_ratio > 3 else 'medium'
+                        }
+            
+            # Efficiency drop detection
+            elif 'efficiency' in tag.lower():
+                if len(data_window) >= 600:  # 10 minutes of data
+                    recent_values = [val for _, val in data_window[-300:]]
+                    older_values = [val for _, val in data_window[-600:-300]]
+                    
+                    avg_recent = statistics.mean(recent_values)
+                    avg_older = statistics.mean(older_values)
+                    efficiency_drop = avg_older - avg_recent
+                    
+                    if efficiency_drop > self.energy_anomaly_patterns['efficiency_drop']['threshold']:
+                        anomalies['efficiency_drop'] = {
+                            'detected': True,
+                            'drop_percent': round(efficiency_drop, 2),
+                            'severity': 'high' if efficiency_drop > 25 else 'medium'
+                        }
+            
+            # Voltage deviation detection
+            elif 'voltage' in tag.lower():
+                if len(data_window) >= 120:  # 2 minutes of data
+                    recent_values = [val for _, val in data_window[-120:]]
+                    baseline_avg = statistics.mean([val for _, val in data_window[-600:-120]]) if len(data_window) >= 600 else current_value
+                    
+                    avg_recent = statistics.mean(recent_values)
+                    deviation_percent = abs(avg_recent - baseline_avg) / baseline_avg * 100 if baseline_avg > 0 else 0
+                    
+                    if deviation_percent > self.energy_anomaly_patterns['voltage_deviation']['threshold']:
+                        anomalies['voltage_deviation'] = {
+                            'detected': True,
+                            'deviation_percent': round(deviation_percent, 2),
+                            'severity': 'high' if deviation_percent > 15 else 'medium'
+                        }
+            
+        except Exception as e:
+            logger.error(f"Error detecting energy anomalies for {tag}: {e}")
+        
+        return anomalies
     
     def calculate_trend(self, tag: str) -> float:
         """Calculate trend using simple linear regression on recent data"""
@@ -350,36 +596,54 @@ class PredictiveAnalytics:
     
     def calculate_maintenance_score(self, tag: str, current_value: float, 
                                   z_score: float, trend: float) -> float:
-        """Calculate predictive maintenance score (0-100)"""
+        """Calculate predictive maintenance score (0-100) with energy-specific weighting"""
         try:
             score = 0.0
             
-            # Z-score component (0-40 points)
+            # Z-score component (0-30 points for energy systems)
             if z_score > 3:
-                score += 40
-            elif z_score > 2:
                 score += 30
+            elif z_score > 2:
+                score += 25
             elif z_score > 1:
-                score += 20
+                score += 15
             elif z_score > 0.5:
                 score += 10
             
-            # Trend component (0-30 points)
+            # Trend component (0-25 points)
             if abs(trend) > 0.1:
-                score += 30
+                score += 25
             elif abs(trend) > 0.05:
-                score += 20
+                score += 18
             elif abs(trend) > 0.01:
-                score += 10
+                score += 12
             
-            # Threshold component (0-30 points)
+            # Threshold component (0-25 points)
             if tag in self.config.maintenance_thresholds:
                 threshold = self.config.maintenance_thresholds[tag]
                 if current_value > threshold:
-                    score += 30
+                    score += 25
                 elif current_value > threshold * 0.9:
-                    score += 20
+                    score += 18
                 elif current_value > threshold * 0.8:
+                    score += 12
+            
+            # Energy-specific criticality (0-20 points)
+            if any(keyword in tag.lower() for keyword in ['battery', 'soc', 'temperature']):
+                # Battery and temperature are critical for energy systems
+                if current_value > 80:  # High temperature or low SoC
+                    score += 20
+                elif current_value > 70:
+                    score += 15
+                elif current_value > 60:
+                    score += 10
+            elif 'efficiency' in tag.lower():
+                # Efficiency drops indicate performance issues
+                if current_value < 70:  # Low efficiency
+                    score += 20
+                elif current_value < 80:
+                    score += 15
+                elif current_value < 85:
                     score += 10
             
             return min(score, 100.0)
@@ -396,6 +660,7 @@ class AnalyticsProcessor:
         self.asset_config = asset_config
         self.oee_analytics = None
         self.energy_analytics = None
+        self.energy_kpi_analytics = None
         self.predictive_analytics = None
         
         # Initialize analytics modules based on configuration
@@ -404,6 +669,9 @@ class AnalyticsProcessor:
         
         if asset_config.energy_monitoring:
             self.energy_analytics = EnergyAnalytics(asset_config.energy_monitoring)
+        
+        if asset_config.energy_analytics:
+            self.energy_kpi_analytics = EnergyKPIAnalytics(asset_config.energy_analytics)
         
         if asset_config.predictive_maintenance:
             self.predictive_analytics = PredictiveAnalytics(asset_config.predictive_maintenance)
@@ -418,7 +686,7 @@ class AnalyticsProcessor:
             'analytics': {}
         }
         
-        # Process with OEE analytics
+        # Process with OEE analytics (Legacy/Optional)
         if self.oee_analytics:
             oee_results = self.oee_analytics.process_telemetry(point)
             if oee_results:
@@ -429,6 +697,12 @@ class AnalyticsProcessor:
             energy_results = self.energy_analytics.process_telemetry(point)
             if energy_results:
                 results['analytics']['energy'] = energy_results
+        
+        # Process with energy KPI analytics
+        if self.energy_kpi_analytics:
+            kpi_results = self.energy_kpi_analytics.process_telemetry(point)
+            if kpi_results:
+                results['analytics']['energy_kpis'] = kpi_results
         
         # Process with predictive analytics
         if self.predictive_analytics:
@@ -445,6 +719,7 @@ class AnalyticsProcessor:
             'modules': {
                 'oee': self.oee_analytics is not None,
                 'energy': self.energy_analytics is not None,
+                'energy_kpis': self.energy_kpi_analytics is not None,
                 'predictive': self.predictive_analytics is not None
             }
         }

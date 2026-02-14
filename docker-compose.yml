@@ -43,8 +43,8 @@ services:
       # InfluxDB Cloud Configuration
       - INFLUXDB_URL=${INFLUXDB_URL:-https://cloud2.influxdata.com}
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
-      - INFLUXDB_ORG=${INFLUXDB_ORG:-globalcorp}
-      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-industrial-data}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-globalenergy}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-energy-data}
       # Edge Collector Configuration
       - BUFFER_SEND_INTERVAL=${BUFFER_SEND_INTERVAL:-30}
       - BUFFER_BATCH_SIZE=${BUFFER_BATCH_SIZE:-100}
